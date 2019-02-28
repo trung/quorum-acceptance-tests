@@ -28,3 +28,5 @@ src/site/resources/reports
 env/travis-*/
 
 **/.DS_Store
+
+**/__pycache__

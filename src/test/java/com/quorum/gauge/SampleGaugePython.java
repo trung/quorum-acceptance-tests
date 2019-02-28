@@ -19,6 +19,7 @@
 
 package com.quorum.gauge;
 
+import com.quorum.gauge.bridge.Plugin;
 import com.quorum.gauge.core.AbstractSpecImplementation;
 import com.thoughtworks.gauge.Step;
 import org.slf4j.Logger;
@@ -31,13 +32,6 @@ public class SampleGaugePython extends AbstractSpecImplementation {
 
     @Step("This is a test to call python passing string <s> and integer <i>")
     public void testCallPython(String s, int i) {
-        String gaugeHome = System.getenv("GAUGE_HOME");
-        // start python plugin with env variables: GAUGE_API_PORT and GAUGE_API_PORTS
-        logger.debug("GaugeHome = {}", gaugeHome);
-        for (String k : System.getenv().keySet()) {
-            if (k.toUpperCase().contains("GAUGE")) {
-                logger.debug("{} = {}", k, System.getenv(k));
-            }
-        }
+        Plugin.startRunner(Plugin.Language.python);
     }
 }
