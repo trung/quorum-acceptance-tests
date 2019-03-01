@@ -19,15 +19,6 @@
 
 package com.quorum.gauge.bridge;
 
-import org.junit.Test;
-
-import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
-
-
-public class PluginTest {
-    @Test
-    public void GetRunnerInfo_whenTypical() {
-        Plugin.RunnerInfo n = Plugin.getRunnerInfo(Plugin.Language.python);
-        assertThat(n.id).isNotBlank();
-    }
+public enum LanguageRunner {
+    python
 }

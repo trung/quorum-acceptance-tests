@@ -17,14 +17,16 @@
  * under the License.
  */
 
-package com.quorum.gauge.bridge;
+package com.thoughtworks.gauge;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
-import com.thoughtworks.gauge.GaugeConstant;
-import com.thoughtworks.gauge.StepValue;
+import com.quorum.gauge.bridge.Common;
+import com.quorum.gauge.bridge.ExtendedStepsScanner;
+import com.quorum.gauge.bridge.LanguageRunner;
 import com.thoughtworks.gauge.connection.GaugeConnection;
+import com.thoughtworks.gauge.scan.ClasspathScanner;
 import gauge.messages.Messages;
 import gauge.messages.Spec;
 import org.apache.commons.lang.SystemUtils;
@@ -40,13 +42,90 @@ import java.net.Socket;
 import java.util.List;
 import java.util.Map;
 
-public class Plugin {
+/**
+ * Similar to {@link com.thoughtworks.gauge.GaugeRuntime}, only applied to additional language runners
+ *
+ * @see com.thoughtworks.gauge.GaugeRuntime
+ */
+public class GaugeBridgeRuntime {
+    private static final Logger logger = LoggerFactory.getLogger(GaugeBridgeRuntime.class);
+    private GaugeConnection connection;
 
-    private static final Logger logger = LoggerFactory.getLogger(Plugin.class);
+    public GaugeBridgeRuntime() {
+        this.connection = new GaugeConnection(readEnvVar(GaugeConstant.GAUGE_API_PORT));
+    }
 
-    public enum Language {python}
+    public boolean validate() {
+        logger.info("Scanning proxy steps");
+        ClasspathScanner classpathScanner = new ClasspathScanner();
+        ExtendedStepsScanner stepsScanner = new ExtendedStepsScanner();
+        classpathScanner.scan(stepsScanner);
+        for (LanguageRunner lr : stepsScanner.getLanguageRunners()) {
+            logger.info("Validation proxy steps against language {}", lr);
+            if (!validateSteps(lr, stepsScanner.getStepNames(lr))) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-    public static class RunnerInfo {
+    private boolean validateSteps(LanguageRunner lr, List<String> stepNames) {
+        if (stepNames.size() == 0) {
+            return true;
+        }
+        int port = startServer(lr, (socket) -> {
+            int msgId = 1;
+            for (String step : stepNames) {
+                StepValue sv = connection.getStepValue(step);
+                Spec.ProtoStepValue protoStepValue = Spec.ProtoStepValue.newBuilder()
+                        .addAllParameters(sv.getParameters())
+                        .setParameterizedStepValue(sv.getStepAnnotationText())
+                        .setStepValue(sv.getStepText())
+                        .build();
+                Messages.Message msg = Messages.Message.newBuilder()
+                        .setMessageType(Messages.Message.MessageType.StepValidateRequest)
+                        .setMessageId(msgId++)
+                        .setStepValidateRequest(Messages.StepValidateRequest.newBuilder()
+                                .setStepText(protoStepValue.getStepValue())
+                                .setStepValue(protoStepValue)
+                                .build())
+                        .build();
+                socket.getOutputStream().write(toData(msg.toByteArray()));
+                socket.getOutputStream().flush();
+            }
+
+            InputStream inputStream = socket.getInputStream();
+            while (socket.isConnected()) {
+                MessageLength messageLength = getMessageLength(inputStream);
+                Messages.Message response = Messages.Message.parseFrom(toBytes(messageLength));
+                if (response.getMessageType() != Messages.Message.MessageType.StepValidateResponse) {
+                    throw new RuntimeException(String.format("invalid response. expected %s but got %s", Messages.Message.MessageType.StepValidateResponse, response.getMessageType()));
+                }
+                Messages.StepValidateResponse stepValidateResponse = response.getStepValidateResponse();
+                if (!stepValidateResponse.getIsValid()) {
+                    logger.error("Msg: {}, Suggestion: {}", stepValidateResponse.getErrorMessage(), stepValidateResponse.getSuggestion());
+                    return false;
+                }
+            }
+            return true;
+        });
+        new Thread(() -> startRunner(lr, port)).start();
+        return true;
+    }
+
+    private int readEnvVar(String env) {
+        String port = System.getenv(env);
+        if (port == null || port.equalsIgnoreCase("")) {
+            throw new RuntimeException(env + " not set");
+        }
+        return Integer.parseInt(port);
+    }
+
+    interface ValidateFunc {
+        boolean validate(Socket socket) throws IOException;
+    }
+
+    static class RunnerInfo {
         public String id;
         public String name;
         public String version;
@@ -57,7 +136,7 @@ public class Plugin {
         public String lspLangId;
     }
 
-    public static RunnerInfo getRunnerInfo(Language language) {
+    public static RunnerInfo getRunnerInfo(LanguageRunner language) {
         String pluginJsonPath = Common.getLanguageJSONFilePath(language.name());
         try {
             return new ObjectMapper().readValue(new File(pluginJsonPath), RunnerInfo.class);
@@ -66,8 +145,7 @@ public class Plugin {
         }
     }
 
-    public static void startRunner(Language language) {
-        int newPort = startServer();
+    private void startRunner(LanguageRunner language, int internalPort) {
         RunnerInfo info = getRunnerInfo(language);
         List<String> cmd = null;
         if (SystemUtils.IS_OS_WINDOWS) {
@@ -85,7 +163,7 @@ public class Plugin {
                     .command(cmd)
                     .directory(new File(Common.getLanguageJSONFilePath(language.name())).getParentFile())
                     .inheritIO();
-            processBuilder.environment().put("GAUGE_INTERNAL_PORT", String.valueOf(newPort));
+            processBuilder.environment().put("GAUGE_INTERNAL_PORT", String.valueOf(internalPort));
             Process runner = processBuilder
                     .start();
             if (runner.waitFor() != 0) {
@@ -96,40 +174,16 @@ public class Plugin {
         }
     }
 
-    private static int startServer() {
+    private int startServer(LanguageRunner lr, ValidateFunc func) {
         // need to start a socket server to accept the initial request from the runner
         try {
             ServerSocket server = new ServerSocket(0);
-            logger.debug("Server started on {}", server.getLocalPort());
+            logger.debug("Internal Server for language {} started on {}", lr, server.getLocalPort());
             new Thread(() -> {
                 Socket socket = null;
                 try {
                     socket = server.accept();
-                    // validate if runner has the corresponding implementation
-                    String stepText = "This is a test to call python passing string <s> and integer <i>";
-                    Spec.ProtoStepValue protoStepValue = getProtoStepValue(stepText);
-                    Messages.Message msg = Messages.Message.newBuilder()
-                            .setMessageType(Messages.Message.MessageType.StepValidateRequest)
-                            .setMessageId(1)
-                            .setStepValidateRequest(Messages.StepValidateRequest.newBuilder()
-                                    .setStepText(stepText)
-                                    .setNumberOfParameters(protoStepValue.getParametersCount())
-                                    .setStepValue(protoStepValue)
-                                    .build())
-                            .build();
-                    socket.getOutputStream().write(toData(msg.toByteArray()));
-                    socket.getOutputStream().flush();
-
-                    InputStream inputStream = socket.getInputStream();
-
-//                    while (socket.isConnected()) {
-//                        logger.debug("Parsing data ...");
-                    MessageLength messageLength = getMessageLength(inputStream);
-                    Messages.Message response = Messages.Message.parseFrom(toBytes(messageLength));
-                    logger.debug("Received: type={}, valid={}", response.getMessageType(), response.getStepValidateResponse().getIsValid());
-                    logger.debug("          errorMessage={}, suggestion={}", response.getStepValidateResponse().getErrorMessage(), response.getStepValidateResponse().getSuggestion());
-//                    }
-
+                    func.validate(socket);
                 } catch (Exception e) {
                     throw new RuntimeException("reading socket error", e);
                 } finally {
@@ -159,24 +213,10 @@ public class Plugin {
         return stream.toByteArray();
     }
 
-    private static Spec.ProtoStepValue getProtoStepValue(String stepText) {
-        GaugeConnection conn = new GaugeConnection(Integer.valueOf(System.getenv(GaugeConstant.GAUGE_API_PORT)));
-        StepValue sv = conn.getStepValue(stepText);
-        return Spec.ProtoStepValue.newBuilder()
-                .addAllParameters(sv.getParameters())
-                .setParameterizedStepValue(sv.getStepAnnotationText())
-                .build();
-    }
-
     private static byte[] toBytes(MessageLength messageLength) throws IOException {
         long messageSize = messageLength.getLength();
         CodedInputStream stream = messageLength.getRemainingStream();
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        for (int i = 0; i < messageSize; i++) {
-            outputStream.write(stream.readRawByte());
-        }
-
-        return outputStream.toByteArray();
+        return stream.readRawBytes((int) messageSize);
     }
 
     static class MessageLength {
@@ -200,6 +240,7 @@ public class Plugin {
     private static MessageLength getMessageLength(InputStream is) throws IOException {
         CodedInputStream codedInputStream = CodedInputStream.newInstance(is);
         long size = codedInputStream.readRawVarint64();
+        logger.debug("Message length: {}", size);
         return new MessageLength(size, codedInputStream);
     }
 }

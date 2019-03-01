@@ -19,7 +19,8 @@
 
 package com.quorum.gauge;
 
-import com.quorum.gauge.bridge.Plugin;
+import com.quorum.gauge.bridge.LanguageRunner;
+import com.quorum.gauge.bridge.ProxyStep;
 import com.quorum.gauge.core.AbstractSpecImplementation;
 import com.thoughtworks.gauge.Step;
 import org.slf4j.Logger;
@@ -30,8 +31,9 @@ import org.springframework.stereotype.Service;
 public class SampleGaugePython extends AbstractSpecImplementation {
     private static final Logger logger = LoggerFactory.getLogger(SampleGaugePython.class);
 
+    @ProxyStep(LanguageRunner.python)
     @Step("This is a test to call python passing string <s> and integer <i>")
     public void testCallPython(String s, int i) {
-        Plugin.startRunner(Plugin.Language.python);
+
     }
 }

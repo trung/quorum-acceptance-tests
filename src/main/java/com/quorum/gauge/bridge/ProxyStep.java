@@ -17,27 +17,15 @@
  * under the License.
  */
 
-package com.quorum.gauge;
+package com.quorum.gauge.bridge;
 
-import com.thoughtworks.gauge.GaugeBridgeRuntime;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
-@SpringBootApplication
-@EnableConfigurationProperties
-public class Main {
-    public static void main(String[] args) {
-        SpringApplication.run(Main.class, args);
-    }
-
-    @Bean
-    public GaugeBridgeRuntime bridgeRuntime() {
-        GaugeBridgeRuntime gaugeBridgeRuntime = new GaugeBridgeRuntime();
-        if (!gaugeBridgeRuntime.validate()) {
-            throw new RuntimeException("steps validation failed");
-        }
-        return gaugeBridgeRuntime;
-    }
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ProxyStep {
+    LanguageRunner value();
 }
