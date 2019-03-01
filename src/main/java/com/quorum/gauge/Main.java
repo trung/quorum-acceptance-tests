@@ -19,7 +19,7 @@
 
 package com.quorum.gauge;
 
-import com.thoughtworks.gauge.GaugeBridgeRuntime;
+import com.quorum.gauge.bridge.GaugeBridgeRuntime;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;

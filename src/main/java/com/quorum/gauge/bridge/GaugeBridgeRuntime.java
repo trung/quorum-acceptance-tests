@@ -17,14 +17,13 @@
  * under the License.
  */
 
-package com.thoughtworks.gauge;
+package com.quorum.gauge.bridge;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
-import com.quorum.gauge.bridge.Common;
-import com.quorum.gauge.bridge.ExtendedStepsScanner;
-import com.quorum.gauge.bridge.LanguageRunner;
+import com.thoughtworks.gauge.GaugeConstant;
+import com.thoughtworks.gauge.StepValue;
 import com.thoughtworks.gauge.connection.GaugeConnection;
 import com.thoughtworks.gauge.scan.ClasspathScanner;
 import gauge.messages.Messages;
@@ -43,9 +42,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Similar to {@link com.thoughtworks.gauge.GaugeRuntime}, only applied to additional language runners
  *
- * @see com.thoughtworks.gauge.GaugeRuntime
  */
 public class GaugeBridgeRuntime {
     private static final Logger logger = LoggerFactory.getLogger(GaugeBridgeRuntime.class);
@@ -61,7 +58,7 @@ public class GaugeBridgeRuntime {
         ExtendedStepsScanner stepsScanner = new ExtendedStepsScanner();
         classpathScanner.scan(stepsScanner);
         for (LanguageRunner lr : stepsScanner.getLanguageRunners()) {
-            logger.info("Validation proxy steps against language {}", lr);
+            logger.info("Validating proxy steps for language runner {}", lr);
             if (!validateSteps(lr, stepsScanner.getStepNames(lr))) {
                 return false;
             }
@@ -183,8 +180,10 @@ public class GaugeBridgeRuntime {
                 Socket socket = null;
                 try {
                     socket = server.accept();
-                    func.validate(socket);
-                } catch (Exception e) {
+                    if (!func.validate(socket)) {
+                        throw new RuntimeException("validation fails");
+                    }
+                } catch (IOException e) {
                     throw new RuntimeException("reading socket error", e);
                 } finally {
                     try {
