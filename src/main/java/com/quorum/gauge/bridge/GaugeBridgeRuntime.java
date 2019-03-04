@@ -31,16 +31,17 @@ import gauge.messages.Spec;
 import org.apache.commons.lang.SystemUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
 
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -49,11 +50,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  *
  */
+@Service
 public class GaugeBridgeRuntime {
     private static final Logger logger = LoggerFactory.getLogger(GaugeBridgeRuntime.class);
     private GaugeConnection connection;
     private Map<String, StepValue> stepsRegistry;
     private Map<LanguageRunner, Socket> languageRunnerClientRegistry;
+    private Set<LanguageRunner> languageRunnerFinish;
     private BlockingQueue<Messages.Message> responseQueue;
     private AtomicInteger messageId;
     private CountDownLatch serverStarted;
@@ -64,19 +67,21 @@ public class GaugeBridgeRuntime {
         this.languageRunnerClientRegistry = new HashMap<>();
         this.responseQueue = new ArrayBlockingQueue<>(5);
         this.messageId = new AtomicInteger(1);
+        this.languageRunnerFinish = new HashSet<>();
     }
 
     public StepValue getStepValue(String stepText) {
         return stepsRegistry.get(stepText);
     }
 
-    public boolean validate() {
+    @PostConstruct
+    public void start() {
         logger.info("Scanning proxy steps");
         ClasspathScanner classpathScanner = new ClasspathScanner();
         ExtendedStepsScanner stepsScanner = new ExtendedStepsScanner();
         classpathScanner.scan(stepsScanner);
         for (LanguageRunner lr : stepsScanner.getLanguageRunners()) {
-            logger.info("Validating proxy steps for language runner {}", lr);
+            logger.info("[{}] Validating proxy steps", lr);
             List<String> stepNames = stepsScanner.getStepNames(lr);
             if (stepNames.size() == 0) {
                 continue;
@@ -92,10 +97,36 @@ public class GaugeBridgeRuntime {
                 }
             }
             if (!validateSteps(lr, stepNames)) {
-                return false;
+                throw new RuntimeException("[" + lr + "] step validation fails");
+            }
+            logger.debug("[{}] notifyBeforeSuite:: ExecutionStarting", lr);
+            Messages.Message beforeSuiteMsg = newMessageBuilder()
+                    .setMessageType(Messages.Message.MessageType.ExecutionStarting)
+                    .setExecutionStartingRequest(Messages.ExecutionStartingRequest.newBuilder()
+                            .build())
+                    .build();
+            Spec.ProtoExecutionResult beforeSuiteResult = executeAndGetStatus(lr, beforeSuiteMsg);
+            if (beforeSuiteResult.getFailed()) {
+                throw new RuntimeException("[" + lr + "] BeforeSuite fails");
             }
         }
-        return true;
+    }
+
+    @PreDestroy
+    public void finish() {
+        logger.info("Stopping all runners");
+        for (LanguageRunner lr : languageRunnerClientRegistry.keySet()) {
+            Messages.Message killMsg = newMessageBuilder()
+                    .setMessageType(Messages.Message.MessageType.KillProcessRequest)
+                    .setKillProcessRequest(Messages.KillProcessRequest.newBuilder()
+                            .build())
+                    .build();
+            languageRunnerFinish.add(lr);
+            Spec.ProtoExecutionResult killResult = executeAndGetStatus(lr, killMsg);
+            if (killResult.getFailed()) {
+                logger.error("Kill {} runner failed due to {}", lr, killResult.getErrorMessage());
+            }
+        }
     }
 
     /**
@@ -232,7 +263,9 @@ public class GaugeBridgeRuntime {
                         responseQueue.put(response);
                     }
                 } catch (Exception e) {
-                    throw new RuntimeException("reading socket error", e);
+                    if (!languageRunnerFinish.contains(lr)) {
+                        throw new RuntimeException("reading socket error", e);
+                    }
                 } finally {
                     try {
                         if (socket != null) {
@@ -287,7 +320,6 @@ public class GaugeBridgeRuntime {
     private static MessageLength getMessageLength(InputStream is) throws IOException {
         CodedInputStream codedInputStream = CodedInputStream.newInstance(is);
         long size = codedInputStream.readRawVarint64();
-        logger.debug("Message length: {}", size);
         return new MessageLength(size, codedInputStream);
     }
 

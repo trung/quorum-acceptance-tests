@@ -19,25 +19,14 @@
 
 package com.quorum.gauge;
 
-import com.quorum.gauge.bridge.GaugeBridgeRuntime;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication
 @EnableConfigurationProperties
 public class Main {
     public static void main(String[] args) {
         SpringApplication.run(Main.class, args);
-    }
-
-    @Bean
-    public GaugeBridgeRuntime bridgeRuntime() {
-        GaugeBridgeRuntime gaugeBridgeRuntime = new GaugeBridgeRuntime();
-        if (!gaugeBridgeRuntime.validate()) {
-            throw new RuntimeException("steps validation failed");
-        }
-        return gaugeBridgeRuntime;
     }
 }

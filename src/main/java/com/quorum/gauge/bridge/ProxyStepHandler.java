@@ -41,25 +41,43 @@ public class ProxyStepHandler {
 
     @Around("@annotation(proxyStep) && @annotation(step)")
     public Object handle(ProceedingJoinPoint joinPoint, ProxyStep proxyStep, Step step) throws Throwable {
+        LanguageRunner lr = proxyStep.value();
         for (String stepText : step.value()) {
             StepValue sv = runtime.getStepValue(stepText);
             String actualStepText = String.format(sv.getStepText().replaceAll("\\{\\}", "\"%s\""), joinPoint.getArgs());
             logger.debug("Handling\nactualStepText: {}\nparsedStepText: {}\nparameters: {}", actualStepText, sv.getStepText(), joinPoint.getArgs());
             Messages.ExecuteStepRequest.Builder requestBuilder = Messages.ExecuteStepRequest.newBuilder()
-                    .setScenarioFailing(false)
                     .setActualStepText(actualStepText)
                     .setParsedStepText(sv.getStepText());
             for (Object paramValue : joinPoint.getArgs()) {
                 requestBuilder.addParameters(Spec.Parameter.newBuilder()
                         .setValue(String.valueOf(paramValue))
+                        .setParameterType(Spec.Parameter.ParameterType.Static)
                         .build());
             }
+            Messages.ExecuteStepRequest executeStepRequest = requestBuilder.build();
+
+            Messages.Message preMsg = runtime.newMessageBuilder()
+                    .setMessageType(Messages.Message.MessageType.StepExecutionStarting)
+                    .setStepExecutionStartingRequest(Messages.StepExecutionStartingRequest.newBuilder()
+                            .setCurrentExecutionInfo(Messages.ExecutionInfo.newBuilder()
+                                    .setCurrentStep(Messages.StepInfo.newBuilder()
+                                            .setIsFailed(false)
+                                            .setStep(executeStepRequest)
+                                            .build())
+                                    .build())
+                            .build())
+                    .build();
+            Spec.ProtoExecutionResult preResult = runtime.executeAndGetStatus(lr, preMsg);
+            if (preResult.getFailed()) {
+                throw new RuntimeException("Prehook fails");
+            }
+
             Messages.Message msg = runtime.newMessageBuilder()
                     .setMessageType(Messages.Message.MessageType.ExecuteStep)
-                    .setExecuteStepRequest(requestBuilder.build())
+                    .setExecuteStepRequest(executeStepRequest)
                     .build();
-
-            Spec.ProtoExecutionResult result = runtime.executeAndGetStatus(proxyStep.value(), msg);
+            Spec.ProtoExecutionResult result = runtime.executeAndGetStatus(lr, msg);
             logger.debug("Result: {}", result);
             if (result.getFailed()) {
                 throw new RuntimeException(result.getErrorMessage());
