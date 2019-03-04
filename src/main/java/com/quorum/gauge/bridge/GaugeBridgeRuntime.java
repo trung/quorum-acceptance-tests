@@ -141,11 +141,12 @@ public class GaugeBridgeRuntime {
     public Spec.ProtoExecutionResult executeAndGetStatus(LanguageRunner lr, Messages.Message msg) {
         Socket socket = languageRunnerClientRegistry.get(lr);
         try {
-            logger.debug("Request: {}", msg);
+            logger.debug("Request --- \n{}\n---------", msg);
             socket.getOutputStream().write(toData(msg.toByteArray()));
             socket.getOutputStream().flush();
             Messages.Message response = responseQueue.take();
             ensureMessageType(response.getMessageType()).is(Messages.Message.MessageType.ExecutionStatusResponse);
+            logger.debug("Response --- \n{}\n---------", response);
             return response.getExecutionStatusResponse().getExecutionResult();
         } catch (Exception e) {
             throw new RuntimeException("execute error", e);

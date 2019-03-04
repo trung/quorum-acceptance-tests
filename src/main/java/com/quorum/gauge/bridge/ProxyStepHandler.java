@@ -19,6 +19,8 @@
 
 package com.quorum.gauge.bridge;
 
+import com.google.protobuf.ByteString;
+import com.thoughtworks.gauge.Gauge;
 import com.thoughtworks.gauge.Step;
 import com.thoughtworks.gauge.StepValue;
 import gauge.messages.Messages;
@@ -30,6 +32,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+
+import java.nio.charset.Charset;
 
 @Aspect
 @Component
@@ -57,32 +61,51 @@ public class ProxyStepHandler {
             }
             Messages.ExecuteStepRequest executeStepRequest = requestBuilder.build();
 
-            Messages.Message preMsg = runtime.newMessageBuilder()
-                    .setMessageType(Messages.Message.MessageType.StepExecutionStarting)
-                    .setStepExecutionStartingRequest(Messages.StepExecutionStartingRequest.newBuilder()
-                            .setCurrentExecutionInfo(Messages.ExecutionInfo.newBuilder()
-                                    .setCurrentStep(Messages.StepInfo.newBuilder()
-                                            .setIsFailed(false)
-                                            .setStep(executeStepRequest)
-                                            .build())
-                                    .build())
-                            .build())
-                    .build();
-            Spec.ProtoExecutionResult preResult = runtime.executeAndGetStatus(lr, preMsg);
-            if (preResult.getFailed()) {
-                throw new RuntimeException("Prehook fails");
-            }
+            preStep(lr, executeStepRequest);
 
             Messages.Message msg = runtime.newMessageBuilder()
                     .setMessageType(Messages.Message.MessageType.ExecuteStep)
                     .setExecuteStepRequest(executeStepRequest)
                     .build();
             Spec.ProtoExecutionResult result = runtime.executeAndGetStatus(lr, msg);
-            logger.debug("Result: {}", result);
-            if (result.getFailed()) {
-                throw new RuntimeException(result.getErrorMessage());
+            for (ByteString bs : result.getMessageList().asByteStringList()) {
+                Gauge.writeMessage(bs.toString(Charset.defaultCharset()));
             }
+            if (result.getFailed()) {
+                throw new RuntimeException(result.getErrorMessage() + " \n" + result.getStackTrace());
+            }
+            postStep(lr);
         }
         return joinPoint.proceed();
+    }
+
+    private void postStep(LanguageRunner lr) {
+        Messages.Message postMsg = runtime.newMessageBuilder()
+                .setMessageType(Messages.Message.MessageType.StepExecutionEnding)
+                .setExecutionEndingRequest(Messages.ExecutionEndingRequest.newBuilder()
+                        .build())
+                .build();
+        Spec.ProtoExecutionResult postResult = runtime.executeAndGetStatus(lr, postMsg);
+        if (postResult.getFailed()) {
+            throw new RuntimeException("Posthook failed: " + postResult.getErrorMessage());
+        }
+    }
+
+    private void preStep(LanguageRunner lr, Messages.ExecuteStepRequest executeStepRequest) {
+        Messages.Message preMsg = runtime.newMessageBuilder()
+                .setMessageType(Messages.Message.MessageType.StepExecutionStarting)
+                .setStepExecutionStartingRequest(Messages.StepExecutionStartingRequest.newBuilder()
+                        .setCurrentExecutionInfo(Messages.ExecutionInfo.newBuilder()
+                                .setCurrentStep(Messages.StepInfo.newBuilder()
+                                        .setIsFailed(false)
+                                        .setStep(executeStepRequest)
+                                        .build())
+                                .build())
+                        .build())
+                .build();
+        Spec.ProtoExecutionResult preResult = runtime.executeAndGetStatus(lr, preMsg);
+        if (preResult.getFailed()) {
+            throw new RuntimeException("Prehook failed: " + preResult.getErrorMessage());
+        }
     }
 }
