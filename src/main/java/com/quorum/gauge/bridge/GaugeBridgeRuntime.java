@@ -38,8 +38,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  *
@@ -47,9 +52,22 @@ import java.util.Map;
 public class GaugeBridgeRuntime {
     private static final Logger logger = LoggerFactory.getLogger(GaugeBridgeRuntime.class);
     private GaugeConnection connection;
+    private Map<String, StepValue> stepsRegistry;
+    private Map<LanguageRunner, Socket> languageRunnerClientRegistry;
+    private BlockingQueue<Messages.Message> responseQueue;
+    private AtomicInteger messageId;
+    private CountDownLatch serverStarted;
 
     public GaugeBridgeRuntime() {
         this.connection = new GaugeConnection(readEnvVar(GaugeConstant.GAUGE_API_PORT));
+        this.stepsRegistry = new HashMap<>();
+        this.languageRunnerClientRegistry = new HashMap<>();
+        this.responseQueue = new ArrayBlockingQueue<>(5);
+        this.messageId = new AtomicInteger(1);
+    }
+
+    public StepValue getStepValue(String stepText) {
+        return stepsRegistry.get(stepText);
     }
 
     public boolean validate() {
@@ -59,29 +77,67 @@ public class GaugeBridgeRuntime {
         classpathScanner.scan(stepsScanner);
         for (LanguageRunner lr : stepsScanner.getLanguageRunners()) {
             logger.info("Validating proxy steps for language runner {}", lr);
-            if (!validateSteps(lr, stepsScanner.getStepNames(lr))) {
+            List<String> stepNames = stepsScanner.getStepNames(lr);
+            if (stepNames.size() == 0) {
+                continue;
+            }
+            if (languageRunnerClientRegistry.get(lr) == null) {
+                serverStarted = new CountDownLatch(1);
+                try {
+                    int port = startServer(lr);
+                    new Thread(() -> startRunner(lr, port)).start();
+                    serverStarted.await();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            if (!validateSteps(lr, stepNames)) {
                 return false;
             }
         }
         return true;
     }
 
-    private boolean validateSteps(LanguageRunner lr, List<String> stepNames) {
-        if (stepNames.size() == 0) {
-            return true;
+    /**
+     * Create a new builder with prepopulated messageId
+     *
+     * @return
+     */
+    public Messages.Message.Builder newMessageBuilder() {
+        return Messages.Message.newBuilder().setMessageId(messageId.getAndIncrement());
+    }
+
+    public Spec.ProtoExecutionResult executeAndGetStatus(LanguageRunner lr, Messages.Message msg) {
+        Socket socket = languageRunnerClientRegistry.get(lr);
+        try {
+            logger.debug("Request: {}", msg);
+            socket.getOutputStream().write(toData(msg.toByteArray()));
+            socket.getOutputStream().flush();
+            Messages.Message response = responseQueue.take();
+            ensureMessageType(response.getMessageType()).is(Messages.Message.MessageType.ExecutionStatusResponse);
+            return response.getExecutionStatusResponse().getExecutionResult();
+        } catch (Exception e) {
+            throw new RuntimeException("execute error", e);
         }
-        int port = startServer(lr, (socket) -> {
-            int msgId = 1;
+    }
+
+    private static MessageTypeChecker ensureMessageType(Messages.Message.MessageType type) {
+        return new MessageTypeChecker(type);
+    }
+
+    private boolean validateSteps(LanguageRunner lr, List<String> stepNames) {
+        Socket socket = languageRunnerClientRegistry.get(lr);
+        try {
             for (String step : stepNames) {
                 StepValue sv = connection.getStepValue(step);
+                stepsRegistry.put(step, sv);
                 Spec.ProtoStepValue protoStepValue = Spec.ProtoStepValue.newBuilder()
                         .addAllParameters(sv.getParameters())
                         .setParameterizedStepValue(sv.getStepAnnotationText())
                         .setStepValue(sv.getStepText())
                         .build();
-                Messages.Message msg = Messages.Message.newBuilder()
+                Messages.Message msg = newMessageBuilder()
                         .setMessageType(Messages.Message.MessageType.StepValidateRequest)
-                        .setMessageId(msgId++)
                         .setStepValidateRequest(Messages.StepValidateRequest.newBuilder()
                                 .setStepText(protoStepValue.getStepValue())
                                 .setStepValue(protoStepValue)
@@ -89,24 +145,15 @@ public class GaugeBridgeRuntime {
                         .build();
                 socket.getOutputStream().write(toData(msg.toByteArray()));
                 socket.getOutputStream().flush();
-            }
 
-            InputStream inputStream = socket.getInputStream();
-            while (socket.isConnected()) {
-                MessageLength messageLength = getMessageLength(inputStream);
-                Messages.Message response = Messages.Message.parseFrom(toBytes(messageLength));
-                if (response.getMessageType() != Messages.Message.MessageType.StepValidateResponse) {
-                    throw new RuntimeException(String.format("invalid response. expected %s but got %s", Messages.Message.MessageType.StepValidateResponse, response.getMessageType()));
-                }
-                Messages.StepValidateResponse stepValidateResponse = response.getStepValidateResponse();
-                if (!stepValidateResponse.getIsValid()) {
-                    logger.error("Msg: {}, Suggestion: {}", stepValidateResponse.getErrorMessage(), stepValidateResponse.getSuggestion());
-                    return false;
-                }
+                Messages.Message response = responseQueue.take();
+                ensureMessageType(response.getMessageType()).is(Messages.Message.MessageType.StepValidateResponse);
+                return response.getStepValidateResponse().getIsValid();
             }
-            return true;
-        });
-        new Thread(() -> startRunner(lr, port)).start();
+        } catch (Exception e) {
+            throw new RuntimeException("validation fails", e);
+        }
+
         return true;
     }
 
@@ -116,10 +163,6 @@ public class GaugeBridgeRuntime {
             throw new RuntimeException(env + " not set");
         }
         return Integer.parseInt(port);
-    }
-
-    interface ValidateFunc {
-        boolean validate(Socket socket) throws IOException;
     }
 
     static class RunnerInfo {
@@ -133,7 +176,7 @@ public class GaugeBridgeRuntime {
         public String lspLangId;
     }
 
-    public static RunnerInfo getRunnerInfo(LanguageRunner language) {
+    private static RunnerInfo getRunnerInfo(LanguageRunner language) {
         String pluginJsonPath = Common.getLanguageJSONFilePath(language.name());
         try {
             return new ObjectMapper().readValue(new File(pluginJsonPath), RunnerInfo.class);
@@ -171,7 +214,7 @@ public class GaugeBridgeRuntime {
         }
     }
 
-    private int startServer(LanguageRunner lr, ValidateFunc func) {
+    private int startServer(LanguageRunner lr) {
         // need to start a socket server to accept the initial request from the runner
         try {
             ServerSocket server = new ServerSocket(0);
@@ -180,10 +223,15 @@ public class GaugeBridgeRuntime {
                 Socket socket = null;
                 try {
                     socket = server.accept();
-                    if (!func.validate(socket)) {
-                        throw new RuntimeException("validation fails");
+                    languageRunnerClientRegistry.put(lr, socket);
+                    serverStarted.countDown();
+                    InputStream inputStream = socket.getInputStream();
+                    while (socket.isConnected()) {
+                        MessageLength messageLength = getMessageLength(inputStream);
+                        Messages.Message response = Messages.Message.parseFrom(toBytes(messageLength));
+                        responseQueue.put(response);
                     }
-                } catch (IOException e) {
+                } catch (Exception e) {
                     throw new RuntimeException("reading socket error", e);
                 } finally {
                     try {
@@ -241,5 +289,19 @@ public class GaugeBridgeRuntime {
         long size = codedInputStream.readRawVarint64();
         logger.debug("Message length: {}", size);
         return new MessageLength(size, codedInputStream);
+    }
+
+    private static class MessageTypeChecker {
+        private Messages.Message.MessageType actualType;
+
+        public MessageTypeChecker(Messages.Message.MessageType actualType) {
+            this.actualType = actualType;
+        }
+
+        public void is(Messages.Message.MessageType expectedType) {
+            if (actualType != expectedType) {
+                throw new RuntimeException("unexpected message type. Expected " + expectedType + " but got " + actualType);
+            }
+        }
     }
 }
