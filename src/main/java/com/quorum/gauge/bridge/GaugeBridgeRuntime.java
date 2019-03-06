@@ -180,10 +180,12 @@ public class GaugeBridgeRuntime {
 
                 Messages.Message response = responseQueue.take();
                 ensureMessageType(response.getMessageType()).is(Messages.Message.MessageType.StepValidateResponse);
-                return response.getStepValidateResponse().getIsValid();
+                if (!response.getStepValidateResponse().getIsValid()) {
+                    throw new RuntimeException(response.getStepValidateResponse().getErrorMessage() + "\n" + response.getStepValidateResponse().getSuggestion());
+                }
             }
-        } catch (Exception e) {
-            throw new RuntimeException("validation fails", e);
+        } catch (IOException | InterruptedException e) {
+            throw new RuntimeException("validation error", e);
         }
 
         return true;
