@@ -21,6 +21,7 @@ package com.quorum.gauge;
 
 import com.quorum.gauge.common.QuorumNode;
 import com.quorum.gauge.core.AbstractSpecImplementation;
+import com.quorum.gauge.ext.MinerStartStop;
 import com.quorum.gauge.services.IstanbulService;
 import com.thoughtworks.gauge.ContinueOnFailure;
 import com.thoughtworks.gauge.Gauge;
@@ -37,6 +38,7 @@ import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -89,8 +91,13 @@ public class Istanbul extends AbstractSpecImplementation {
     @Step("Resume the stopped validators")
     public void startValidators() {
         List<QuorumNode> nodes = mustHaveValue(DataStoreFactory.getScenarioDataStore(), "stoppedNodes", List.class);
-        Observable.fromIterable(nodes)
-                .flatMap(node -> istanbulService.startMining(node).subscribeOn(Schedulers.io()))
-                .blockingFirst();
+        List<Observable<MinerStartStop>> observables = nodes.stream().map(n -> istanbulService.startMining(n).subscribeOn(Schedulers.io())).collect(Collectors.toList());
+        Observable.zip(observables, (z) -> {
+            for (Object raw : z) {
+                MinerStartStop res = (MinerStartStop) raw;
+                logger.debug("{} --> {}", res.getId(), res.getResult());
+            }
+            return true;
+        }).blockingFirst();
     }
 }

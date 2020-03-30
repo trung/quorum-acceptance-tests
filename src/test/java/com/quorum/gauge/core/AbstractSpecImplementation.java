@@ -70,6 +70,9 @@ public abstract class AbstractSpecImplementation {
     protected QuorumBootService quorumBootService;
 
     @Autowired
+    protected RPCService rpcService;
+
+    @Autowired
     private QuorumNetworkProperty networkProperty;
 
     protected BigInteger currentBlockNumber() {

@@ -1,0 +1,247 @@
+name: Run
+on:
+  push:
+    branches:
+      - 'playground'
+env:
+  TERRAFORM_VERSION: 0.12.24
+jobs:
+  run:
+    name: With ${{ matrix.network }} using ${{ matrix.consensus }}
+    strategy:
+      fail-fast: false
+      matrix:
+        consensus: ["istanbul", "raft"]
+        # each entry has the format: <network_tf_dir>::<config key>
+        # config key is one of those defined in CONFIG_MAP env variable below
+        network: ["networks/typical", "networks/plugins::hello-world"]
+    runs-on: ubuntu-latest
+    env:
+      # a valid JSON flat map which is used to retrieve config string of a key
+      # the config string has the format: key=value::key=value...
+      # which are key/value pairs being injected as environment variables
+      CONFIG_MAP: |
+        {
+          "hello-world": "GAUGE_TAGS=hello-world::TF_VAR_plugin_name=hello-world"
+        }
+    steps:
+      - name: Prepare environment variables for ${{ matrix.network }}
+        run: |
+          # extract config key if present
+          raw=${{ matrix.network }}     # e.g.: networks/plugins::plugin_name=hello-world::k=1
+          network_tf_dir="${raw%%::*}"  # networks/plugins
+          raw=${raw#$network_tf_dir}    # delete the prefix
+          config_key=${raw#::}          # delete the separator
+
+          if [[ "$config_key" != "" ]]; then
+            raw=$(echo '${{ env.CONFIG_MAP }}' | jq -r ".[\"$config_key\"]")
+            if [[ "$raw" == "null" ]]; then
+              echo "::error::Key $config_key not found in the env.CONFIG_MAP"
+              exit 1
+            fi
+            while [[ "$raw" != "" ]]; do   # if there are key/value pairs
+              kv=${raw%%::*}               # extract a pair: plugin_name=hello-world
+              k=${kv%%=*}                  # extract key:    plugin_name
+              v=${kv##*=}                  # extract value:  hello-world
+              echo "::set-env name=$k::$v" # inject as env variables
+              raw=${raw#$kv}               # delete the prefix
+              raw=${raw#::}                # delete the separator
+            done
+          fi
+
+          echo "::set-env name=TF_VAR_consensus::${{ matrix.consensus }}"
+          echo "::set-env name=NETWORK_TF_DIR::$network_tf_dir"
+      - name: 'Checkout'
+        uses: actions/checkout@v2
+      - name: Setup Java 11
+        uses: actions/setup-java@v1
+        with:
+          java-version: 11
+      - name: 'Setup Terraform and Gauge'
+        id: setup
+        env:
+          BIN_DIR: terraform.d/bin
+        run: |
+          pushd ${{ env.NETWORK_TF_DIR }}
+          mkdir -p terraform.d/plugins/linux_amd64 && mkdir -p ${{ env.BIN_DIR }}
+
+          echo "::debug file=terraform::Downloading..."
+          wget https://releases.hashicorp.com/terraform/${{ env.TERRAFORM_VERSION }}/terraform_${{ env.TERRAFORM_VERSION }}_linux_amd64.zip -O terraform.zip -q
+          unzip -o terraform.zip -d ${{ env.BIN_DIR }}
+
+          echo "::debug file=solc::Downloading..."
+          wget https://github.com/ethereum/solidity/releases/download/v0.5.4/solc-static-linux -O ${{ env.BIN_DIR }}/solc -q
+          chmod +x ${{ env.BIN_DIR }}/solc
+
+          echo "::debug file=gauge::Downloading..."
+          wget https://github.com/getgauge/gauge/releases/download/v1.0.7/gauge-1.0.7-linux.x86_64.zip -O gauge.zip -q
+          unzip -o gauge.zip -d ${{ env.BIN_DIR }}
+
+          echo "::debug file=terraform-provider-quorum::Downloading..."
+          wget https://github.com/terraform-providers/terraform-provider-quorum/releases/download/v1.0.0-beta.1/terraform-provider-quorum_1.0.0-beta.1_linux_amd64.zip -O provider.zip -q
+          unzip provider.zip -d terraform.d/plugins/linux_amd64/
+
+          popd
+          ${{ env.NETWORK_TF_DIR }}/${{ env.BIN_DIR }}/gauge install
+          echo "::add-path::$(pwd)/${{ env.NETWORK_TF_DIR }}/${{ env.BIN_DIR }}"
+      - name: 'Start Quorum network'
+        id: network
+        run: |
+          echo "::debug file=terraform::Verifying if the binary is setup"
+          (which terraform && terraform --version) || echo "::error file=terrform::not found"
+          echo "::debug file=solc::Verifying if the binary is setup"
+          (which solc && solc --version) || echo "::error file=solc::not found"
+          echo "::debug file=gauge::Verifying if the binary is setup"
+          (which gauge && gauge --version) || echo "::error file=gauge::not found"
+          echo "::debug ::Provisioning the network"
+          src/scripts/start-network.sh $(pwd)/${{ env.NETWORK_TF_DIR }} ${{ runner.temp }}
+          network_name=$(basename ${{ env.NETWORK_TF_DIR }})
+          echo "::set-output name=network_output_dir::${{ runner.temp }}/$network_name/"
+          echo "::set-output name=network_name::$network_name"
+      - name: 'Run tests'
+        #env:
+        #  LOGGING_LEVEL_COM_QUORUM_GAUGE: DEBUG
+        run: |
+          additional_tags="|| ${{ env.NETWORK_TF_DIR }}"
+          if [[ "${{ env.GAUGE_TAGS }}" != "" ]]; then
+            additional_tags="|| (${{ env.NETWORK_TF_DIR }} && ${{ env.GAUGE_TAGS }})"
+          fi
+          src/scripts/run-tests.sh \
+            ${{ steps.network.outputs.network_name }} \
+            ${{ steps.network.outputs.network_output_dir }} \
+            "basic || basic-${{ matrix.consensus }} || (advanced && ${{ matrix.consensus }}) $additional_tags" \
+            ${{ github.run_number }}
+      - name: 'Display debugging info if tests failed'
+        if: failure()
+        run: |
+          docker ps -a
+          cd ${{ env.NETWORK_TF_DIR }} && terraform show
+  notify:
+    if: always()
+    name: Notify
+    needs:
+      - run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare Slack message
+        id: status
+        uses: actions/github-script@0.8.0
+        with:
+          script: |
+            ////////////////////////////////////
+            // retrieve workflow run data
+            ////////////////////////////////////
+            console.log("get workflow run")
+            const wf_run = await github.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: ${{ github.run_id }}
+            })
+            console.log(wf_run.data)
+            console.log("get jobs for workflow run:", wf_run.data.jobs_url)
+            const jobs_response = await github.request(wf_run.data.jobs_url)
+            ////////////////////////////////////
+            // build slack notification message
+            ////////////////////////////////////
+            // some utility functions
+            var date_diff_func = function(start, end) {
+                var duration = end - start
+                // format the duration
+                var delta = duration / 1000
+                var days = Math.floor(delta / 86400)
+                delta -= days * 86400
+                var hours = Math.floor(delta / 3600) % 24
+                delta -= hours * 3600
+                var minutes = Math.floor(delta / 60) % 60
+                delta -= minutes * 60
+                var seconds = Math.floor(delta % 60)
+                var format_func = function(v, text, check) {
+                    if (v <= 0 && check) {
+                        return ""
+                    } else {
+                        return v + text
+                    }
+                }
+                return format_func(days, "d", true) + format_func(hours, "h", true) + format_func(minutes, "m", true) + format_func(seconds, "s", false)
+            }
+            var status_icon_func = function(s) {
+                switch (s) {
+                case "w_success":
+                    return ":white_check_mark:"
+                case "w_failure":
+                    return ":no_entry:"
+                case "w_cancelled":
+                    return ":warning:"
+                case "success":
+                    return "\u2713"
+                case "failure":
+                    return "\u2717"
+                default:
+                    return "\u20e0"
+                }
+            }
+            const commit = "${{ github.sha }}".substr(0, 6)
+            var pr = ""
+            for (p of wf_run.data.pull_requests) {
+              pr += ",<"+ p.url + "|#" + p.number + ">"
+            }
+            if (pr != "") {
+              pr = "for " + pr.substr(1)
+            }
+            // build the message
+            var fields = []
+            var is_wf_success = true
+            var is_wf_failure = false
+            for (j of jobs_response.data.jobs) {
+                console.log(j.name, ":", j.status, j.conclusion, j.started_at, j.completed_at)
+                // ignore the current job running this script
+                if (j.status != "completed") {
+                    continue
+                }
+                if (j.conclusion != "success") {
+                  is_wf_success = false
+                }
+                if (j.conclusion == "failure") {
+                  is_wf_failure = true
+                }
+                fields.push({
+                    type: "mrkdwn",
+                    text: status_icon_func(j.conclusion) + " <" + j.html_url + "|" + j.name + ">\n  \u21b3 completed in " + date_diff_func(new Date(j.started_at), new Date(j.completed_at))
+                })
+            }
+            var workflow_status = "w_cancelled"
+            if (is_wf_success) {
+              workflow_status = "w_success"
+            } else if (is_wf_failure) {
+              workflow_status = "w_failure"
+            }
+            var slack_msg = {
+                blocks: [
+                    {
+                        type: "section",
+                        text: {
+                            type: "mrkdwn",
+                            text: "<https://github.com/${{ github.repository }}|*${{ github.repository }}*>\nfrom *${{ github.ref }}@" + commit + "*"
+                        }
+                    },
+                    {
+                        type: "section",
+                        text: {
+                            type: "mrkdwn",
+                            text: status_icon_func(workflow_status) + " *${{ github.workflow }}* " + pr + "\nWorkflow run <" + wf_run.data.html_url + "|#${{ github.run_number }}> completed in " + date_diff_func(new Date(wf_run.data.created_at), new Date(wf_run.data.updated_at))
+                        }
+                    },
+                    {
+                        type: "divider"
+                    },
+                    {
+                        type: "section",
+                        fields: fields
+                    }
+                ]
+            }
+            return slack_msg
+      - name: Send to Slack
+        if: success()
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK_URL}} -H "Content-type: application/json" --data '${{ steps.status.outputs.result }}'
