@@ -1,6 +1,6 @@
 # Pluggable Architecture with hello-world plugin
 
- Tags: networks/plugins, hello-world
+ Tags: networks/plugins, plugin-hello-world
 
 Plugin hello world exposes an API which is delegated via JSON RPC
 

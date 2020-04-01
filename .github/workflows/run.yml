@@ -14,7 +14,7 @@ jobs:
         consensus: ["istanbul", "raft"]
         # each entry has the format: <network_tf_dir>::<config key>
         # config key is one of those defined in CONFIG_MAP env variable below
-        network: ["networks/typical", "networks/plugins::hello-world"]
+        network: ["networks/typical", "networks/plugins::hello-world", "networks/plugins::security"]
     runs-on: ubuntu-latest
     env:
       # a valid JSON flat map which is used to retrieve config string of a key
@@ -22,7 +22,8 @@ jobs:
       # which are key/value pairs being injected as environment variables
       CONFIG_MAP: |
         {
-          "hello-world": "GAUGE_TAGS=hello-world::TF_VAR_plugin_name=hello-world"
+          "hello-world": "GAUGE_TAGS=plugin-hello-world::TF_VAR_plugin_name=hello-world",
+          "security": "GAUGE_TAGS=plugin-security::TF_VAR_plugin_name=security"
         }
     steps:
       - name: Prepare environment variables for ${{ matrix.network }}
