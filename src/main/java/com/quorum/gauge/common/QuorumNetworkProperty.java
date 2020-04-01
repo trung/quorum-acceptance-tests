@@ -33,6 +33,7 @@ import java.util.Map;
 public class QuorumNetworkProperty {
     private Map<QuorumNode, Node> nodes = new HashMap<>();
     private Map<String, WalletData> wallets = new HashMap<>();
+    private OAuth2ServerProperty oauth2Server;
     private SocksProxy socksProxy;
     private String bootEndpoint;
 
@@ -74,6 +75,14 @@ public class QuorumNetworkProperty {
             converted.put(quorumNodeNodeEntry.getKey().name(), quorumNodeNodeEntry.getValue());
         }
         return converted;
+    }
+
+    public OAuth2ServerProperty getOauth2Server() {
+        return oauth2Server;
+    }
+
+    public void setOauth2Server(OAuth2ServerProperty oauth2Server) {
+        this.oauth2Server = oauth2Server;
     }
 
     public static class SocksProxy {
@@ -161,6 +170,30 @@ public class QuorumNetworkProperty {
 
         public void setPrivacyAddressAliases(Map<String, String> privacyAddressAliases) {
             this.privacyAddressAliases = privacyAddressAliases;
+        }
+    }
+
+    public static class OAuth2ServerProperty {
+        private String clientEndpoint;
+        private String adminEndpoint;
+
+        public OAuth2ServerProperty() {
+        }
+
+        public String getClientEndpoint() {
+            return clientEndpoint;
+        }
+
+        public void setClientEndpoint(String clientEndpoint) {
+            this.clientEndpoint = clientEndpoint;
+        }
+
+        public String getAdminEndpoint() {
+            return adminEndpoint;
+        }
+
+        public void setAdminEndpoint(String adminEndpoint) {
+            this.adminEndpoint = adminEndpoint;
         }
     }
 }

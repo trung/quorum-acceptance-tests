@@ -17,4 +17,8 @@ terraform init
 echo "Terraform Apply"
 terraform apply --auto-approve -var output_dir=$network_output_dir -var network_name=$(basename $network_tf_dir)
 
+if [[ -f "wait.sh" ]]; then
+  ./wait.sh
+fi
+
 popd > /dev/null

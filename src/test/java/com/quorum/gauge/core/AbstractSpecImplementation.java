@@ -73,7 +73,10 @@ public abstract class AbstractSpecImplementation {
     protected RPCService rpcService;
 
     @Autowired
-    private QuorumNetworkProperty networkProperty;
+    protected OAuth2Service oAuth2Service;
+
+    @Autowired
+    protected QuorumNetworkProperty networkProperty;
 
     protected BigInteger currentBlockNumber() {
         return mustHaveValue(DataStoreFactory.getScenarioDataStore(), "blocknumber", BigInteger.class);

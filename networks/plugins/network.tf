@@ -6,7 +6,7 @@ module "helper" {
   number_of_nodes = var.number_of_nodes
   geth = {
     container = {
-      image = "quorumengineering/quorum:latest"
+      image = var.quorum_docker_image
       port  = { raft = 50400, p2p = 21000, http = 8545, ws = -1 }
     }
     host = {
@@ -15,7 +15,7 @@ module "helper" {
   }
   tessera = {
     container = {
-      image = "quorumengineering/tessera:latest"
+      image = { name = "quorumengineering/tessera:latest", local = false }
       port  = { thirdparty = 9080, p2p = 9000 }
     }
     host = {

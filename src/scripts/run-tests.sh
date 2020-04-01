@@ -3,7 +3,7 @@
 set -e
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 <network_name> <network_output_dir> [tags] [runId]"
+  echo "Usage: $0 <profile> <network_output_dir> [tags] [runId]"
   exit 1
 fi
 

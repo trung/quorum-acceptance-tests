@@ -2,7 +2,7 @@ name: Run
 on:
   push:
     branches:
-      - 'playground'
+      - 'gh-*'
 env:
   TERRAFORM_VERSION: 0.12.24
 jobs:
@@ -18,12 +18,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # a valid JSON flat map which is used to retrieve config string of a key
-      # the config string has the format: key=value::key=value...
+      # the config object has the format: { key: value, key: value... }
       # which are key/value pairs being injected as environment variables
+      # some reserved key being used:
+      # - ADDTIONAL_PROFILE : additional Spring Active Profiles
+      # - GAUGE_TAGS: Gauge Tag expression "AND" with the default network tag
+      # - GAUGE_TAGS_OVERRIDE: Override default tags and use only this tag expression "AND" with the default network tag
       CONFIG_MAP: |
         {
-          "hello-world": "GAUGE_TAGS=plugin-hello-world::TF_VAR_plugin_name=hello-world",
-          "security": "GAUGE_TAGS=plugin-security::TF_VAR_plugin_name=security"
+          "hello-world": {
+              "GAUGE_TAGS"        : "plugin-hello-world",
+              "TF_VAR_plugin_name": "hello-world"
+          },
+          "security": {
+              "ADDTIONAL_PROFILE"         : "security",
+              "GAUGE_TAGS_OVERRIDE"       : "plugin-security",
+              "TF_VAR_plugin_name"        : "security",
+              "TF_VAR_quorum_docker_image": "{ name = \"docker.pkg.github.com/quorumengineering/quorum/quorum:rpc-security\", local = false }",
+              "TF_VAR_docker_registry"    : "[{ name= \"docker.pkg.github.com\", username = \"quorumbot\", password = \"${{ secrets.QUORUMBOT_PAT }}\"}]"
+          }
         }
     steps:
       - name: Prepare environment variables for ${{ matrix.network }}
@@ -40,13 +53,14 @@ jobs:
               echo "::error::Key $config_key not found in the env.CONFIG_MAP"
               exit 1
             fi
-            while [[ "$raw" != "" ]]; do   # if there are key/value pairs
-              kv=${raw%%::*}               # extract a pair: plugin_name=hello-world
-              k=${kv%%=*}                  # extract key:    plugin_name
-              v=${kv##*=}                  # extract value:  hello-world
-              echo "::set-env name=$k::$v" # inject as env variables
-              raw=${raw#$kv}               # delete the prefix
-              raw=${raw#::}                # delete the separator
+            set_env_raw=$(echo $raw | jq -r 'to_entries[] | .key + "::" + .value') # return \n delemited values
+            SAVEIFS=$IFS                  # Save current IFS
+            IFS=$'\n'                     # Change IFS to new line
+            set_env=($set_env_raw)        # split to array $set_env
+            IFS=$SAVEIFS                  # Restore IFS
+            for (( i=0; i<${#set_env[@]}; i++ ))
+            do
+              echo "::set-env name=${set_env[$i]}"
             done
           fi
 
@@ -105,12 +119,20 @@ jobs:
         run: |
           additional_tags="|| ${{ env.NETWORK_TF_DIR }}"
           if [[ "${{ env.GAUGE_TAGS }}" != "" ]]; then
-            additional_tags="|| (${{ env.NETWORK_TF_DIR }} && ${{ env.GAUGE_TAGS }})"
+            additional_tags="|| (${{ env.NETWORK_TF_DIR }} && (${{ env.GAUGE_TAGS }}))"
+          fi
+          tags="basic || basic-${{ matrix.consensus }} || (advanced && ${{ matrix.consensus }}) $additional_tags"
+          if [[ "${{ env.GAUGE_TAGS_OVERRIDE }}" != "" ]]; then
+            tags="${{ env.NETWORK_TF_DIR }} && (${{ env.GAUGE_TAGS_OVERRIDE }})"
+          fi
+          profiles="${{ steps.network.outputs.network_name }}"
+          if [[ "${{ env.ADDTIONAL_PROFILE }}" != "" ]]; then
+            profiles="$profiles,${{ env.ADDTIONAL_PROFILE }}"
           fi
           src/scripts/run-tests.sh \
-            ${{ steps.network.outputs.network_name }} \
-            ${{ steps.network.outputs.network_output_dir }} \
-            "basic || basic-${{ matrix.consensus }} || (advanced && ${{ matrix.consensus }}) $additional_tags" \
+            "$profiles" \
+            "${{ steps.network.outputs.network_output_dir }}" \
+            "$tags" \
             ${{ github.run_number }}
       - name: 'Display debugging info if tests failed'
         if: failure()

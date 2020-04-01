@@ -1,9 +1,8 @@
-Containing customized networks. Folder names indicate network names which are tagged correspondingly with specs and scenarios.
+This folder contains customized networks. 
 
-Customized networks are provisioned before running the tests. Test reports are collected independently.
+Relative path to the folder represents network identification which are tagged correspondingly with specs and scenarios. 
+E.g.: `networks/plugins`, `networks/typical` ...
 
-```
-mvn clean verify \
-    -Dnetworks=plugins -DTF_VAR_consensus=raft \
-    -Dtags=plugin-security
-```
+In each network folder, there's `wait.sh` script to pause until the network is ready .
+
+Customized networks are provisioned independently before running the tests. 

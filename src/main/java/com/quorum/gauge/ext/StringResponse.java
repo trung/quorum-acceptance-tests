@@ -5,5 +5,5 @@ import org.web3j.protocol.core.Response;
 /**
  * Generic response that expects a string
  */
-public class StringResonse extends Response<String> {
+public class StringResponse extends Response<String> {
 }
