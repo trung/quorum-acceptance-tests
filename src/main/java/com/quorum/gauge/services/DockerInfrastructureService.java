@@ -349,6 +349,34 @@ public class DockerInfrastructureService
                 );
     }
 
+    @Override
+    public Observable<Boolean> writeLogs(String resourceId, OutputStream outputStream) {
+        return Observable.just(resourceId)
+                .map(id -> dockerClient.logContainerCmd(id)
+                        .withStdOut(true)
+                        .withStdErr(true)
+                        .withFollowStream(false)
+                        .withTailAll()
+                        .exec(new ResultCallback.Adapter<>(){
+                            @Override
+                            public void onNext(Frame object) {
+                                try {
+                                    outputStream.write(object.getPayload());
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            }
+                        })
+                        .awaitCompletion(5, TimeUnit.MINUTES)
+                ).doOnComplete(outputStream::close);
+    }
+
+    @Override
+    public Observable<String> resourceName(String id) {
+        return Observable.just(dockerClient.inspectContainerCmd(id).exec())
+                .map(res -> res.getName());
+    }
+
     private Observable<Boolean> startContainerFromTemplate(String templateContainerId, NodeAttributes attr, String image, ResourceCreationCallback callback) {
         return Observable.just(templateContainerId)
                 .map(id -> {

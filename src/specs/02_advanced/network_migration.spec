@@ -20,7 +20,7 @@ upgradable to the new version
 
 ## Migrate all nodes in the network at the same time
 
- Tags: post-condition/datadir-cleanup, post-condition/network-cleanup
+ Tags: post-condition/datadir-cleanup, post-condition/network-cleanup, all-nodes
 
 * Restart the network with:
     | node  | quorum       | tessera |
@@ -35,7 +35,7 @@ upgradable to the new version
 
 ## Migrate node by node in the network
 
- Tags: post-condition/datadir-cleanup, post-condition/network-cleanup
+ Tags: post-condition/datadir-cleanup, post-condition/network-cleanup, one-by-one
 
 * Stop and start "quorum" in "Node1" using <to_version>
 * Verify block number in "Node1" in sync with "recordedBlockNumber"

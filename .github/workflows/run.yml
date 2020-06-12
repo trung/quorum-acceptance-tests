@@ -6,12 +6,14 @@ on:
     paths-ignore:
       - '**.md'
       - '.gitignore'
+      - '.github/workflows/publish_docker_image.yml'
     branches:
       - '**'
   push:
     paths-ignore:
       - '**.md'
       - '.gitignore'
+      - '.github/workflows/publish_docker_image.yml'
     branches:
       - 'master'
       - 'dev-*'
@@ -119,17 +121,16 @@ jobs:
           echo "::set-output name=mvnArg::$mvnArg"
           echo "::set-output name=outputDir::${{ runner.temp }}"
       - name: 'Run tests ${{ steps.setup.outputs.mvnArg }}'
-          #MAVEN_OPTS: -Xmx512m -XX:MaxPermSize=128m
-          #LOGGING_LEVEL_COM_QUORUM_GAUGE: DEBUG
         run: |
+          export LOGGING_LEVEL_COM_QUORUM_GAUGE=DEBUG
           mvn --no-transfer-progress -B \
               clean test \
               -P gaugeFailSafe \
-              -Pauto \
-              -Dtags="${{ matrix.tag }}" ${{ steps.setup.outputs.mvnArg }} \
-              -Denv=${{ steps.setup.outputs.gauge-env }} \
-              -Dauto.outputDir=${{ steps.setup.outputs.outputDir }} \
-              -Dauto.jobid=${{ steps.keys.outputs.tag }}
+              -P auto \
+              -D tags="${{ matrix.tag }}" ${{ steps.setup.outputs.mvnArg }} \
+              -D env=${{ steps.setup.outputs.gauge-env }} \
+              -D auto.outputDir=${{ steps.setup.outputs.outputDir }} \
+              -D auto.jobid=${{ steps.keys.outputs.tag }}
       - name: 'Read test report'
         if: always()
         run: |
@@ -148,11 +149,17 @@ jobs:
             echo "::error file=$(_jq '.file'),line=$(_jq '.line'),col=$(_jq '.col')::$(_jq '.message')"
           done
           cat ${{ steps.setup.outputs.outputDir}}/summary.txt
-      - name: 'Display debug when failure happens'
-        if: failure() && steps.setup.outputs.useAWS == 'true'
-        working-directory: ${{ env.INFRA_FOLDER }}
-        run: |
-          terraform show
+      - name: 'Collect container logs if failure'
+        if: failure()
+        uses: jwalton/gh-docker-logs@v1
+        with:
+          dest: '${{ steps.setup.outputs.outputDir }}/logs'
+      - name: 'Upload logs if failure'
+        if: failure()
+        uses: actions/upload-artifact@v2
+        with:
+          name: logs-${{ steps.keys.outputs.tag }}
+          path: ${{ steps.setup.outputs.outputDir }}/logs/*.* # only files not directory
       - name: 'Upload test report'
         if: always()
         uses: actions/upload-artifact@v2
@@ -165,9 +172,9 @@ jobs:
         run: |
           mvn --no-transfer-progress -B \
             exec:exec@infra.terraform-destroy \
-            -Pauto \
-            -Dinfra.folder="${{ env.INFRA_FOLDER }}" \
-            -Dinfra.profile="${{ env.INFRA_PROFILE }}"
+            -P auto \
+            -D infra.folder="${{ env.INFRA_FOLDER }}" \
+            -D infra.profile="${{ env.INFRA_PROFILE }}"
   notify:
     if: always() && github.event_name != 'pull_request'
     name: Notify
@@ -188,8 +195,13 @@ jobs:
             run_on="GithubActionsVM"
             echo "::warning ::Tests run on Github Actions VM. Some tests may fail due to lack of hardware resources."
           fi
+          toSlack="true"
+          if [ "${{ secrets.SLACK_WEBHOOK_URL }}" == "" ]; then
+            toSlack="false"
+          fi
           echo "::set-output name=run-on::$run_on"
           echo "::set-output name=gitref-path::$gitref_path"
+          echo "::set-output name=toSlack::$toSlack"
       - name: 'Download test reports'
         uses: actions/download-artifact@v2
       - name: 'Aggregate test reports'
@@ -421,7 +433,7 @@ jobs:
             }
             return slack_msg
       - name: 'Send to Slack'
-        if: always()
+        if: always() && steps.setup.outputs.toSlack == 'true'
         run: |
           cat <<JSON > long_message.json
           ${{ steps.status.outputs.result }}

@@ -39,6 +39,9 @@ public class QuorumNetworkProperty {
 
     private DockerInfrastructureProperty dockerInfrastructure = new DockerInfrastructureProperty();
 
+    // empty means no logging
+    private String infrastructureLoggingPath;
+
     public SocksProxy getSocksProxy() {
         return socksProxy;
     }
@@ -107,6 +110,14 @@ public class QuorumNetworkProperty {
                 break;
         }
         return duration;
+    }
+
+    public String getInfrastructureLoggingPath() {
+        return infrastructureLoggingPath;
+    }
+
+    public void setInfrastructureLoggingPath(String infrastructureLoggingPath) {
+        this.infrastructureLoggingPath = infrastructureLoggingPath;
     }
 
     public static class SocksProxy {

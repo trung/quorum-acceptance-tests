@@ -1,6 +1,10 @@
 name: Publish Docker Image
 on:
   push:
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.github/workflows/run.yml'
     branches:
       - 'master'
       - 'dev-*'
@@ -20,8 +24,13 @@ jobs:
           if [ "${{ secrets.DOCKER_REPO }}" == "" ]; then
             target="Github Packages"
           fi
+          toSlack="true"
+          if [ "${{ secrets.SLACK_WEBHOOK_URL }}" == "" ]; then
+            toSlack="false"
+          fi
           echo "::set-output name=target::$target"
           echo "::set-output name=repo::$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          echo "::set-output name=toSlack::$toSlack"
       - name: 'Build and push to Github Packages'
         if: steps.setup.outputs.target == 'Github Packages'
         uses: docker/build-push-action@v1
@@ -42,7 +51,7 @@ jobs:
           tag_with_ref: true
           add_git_labels: true
       - name: 'Notify'
-        if: always()
+        if: always() && steps.setup.outputs.toSlack == 'true'
         run: |
           status_icon=":question:"
           status="${{ job.status }}"

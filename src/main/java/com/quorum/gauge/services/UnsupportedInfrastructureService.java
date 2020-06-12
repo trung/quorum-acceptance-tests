@@ -26,6 +26,7 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Service;
 
+import java.io.OutputStream;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -105,6 +106,16 @@ public class UnsupportedInfrastructureService implements InfrastructureService, 
 
     @Override
     public Observable<Boolean> grepLog(String resourceId, String grepStr, long timeoutAmount, TimeUnit timeoutUnit) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Observable<Boolean> writeLogs(String resourceId, OutputStream outputStream) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Observable<String> resourceName(String id) {
         throw new UnsupportedOperationException();
     }
 }

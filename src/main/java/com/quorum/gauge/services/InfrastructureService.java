@@ -26,6 +26,7 @@ import com.quorum.gauge.common.GethArgBuilder;
 import io.reactivex.Observable;
 import org.springframework.util.CollectionUtils;
 
+import java.io.OutputStream;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
@@ -72,6 +73,13 @@ public interface InfrastructureService {
     Observable<Boolean> wait(String resourceId);
 
     Observable<Boolean> grepLog(String resourceId, String grepStr, long timeoutAmount, TimeUnit timeoutUnit);
+
+    /**
+     *  OutputStream will be closed when Observable completes
+     */
+    Observable<Boolean> writeLogs(String resourceId, OutputStream outputStream);
+
+    Observable<String> resourceName(String id);
 
     interface ResourceCreationCallback {
         void onCreate(String resourceId);

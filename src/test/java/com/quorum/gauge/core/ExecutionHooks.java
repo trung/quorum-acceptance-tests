@@ -26,13 +26,19 @@ import com.quorum.gauge.services.InfrastructureService.NetworkResources;
 import com.quorum.gauge.services.UtilService;
 import com.thoughtworks.gauge.*;
 import com.thoughtworks.gauge.datastore.DataStoreFactory;
+import io.reactivex.Observable;
 import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.SystemUtils;
+import org.apache.logging.log4j.util.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.math.BigInteger;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -130,11 +136,39 @@ public class ExecutionHooks {
         public void accept(ExecutionContext executionContext) {
             try {
                 NetworkResources networkResources = (NetworkResources) DataStoreFactory.getScenarioDataStore().get("networkResources");
+                if (executionContext.getCurrentScenario().getIsFailing() && Strings.isNotBlank(networkProperty.getInfrastructureLoggingPath())) {
+                    File dir = new File(networkProperty.getInfrastructureLoggingPath());
+                    dir.mkdirs();
+                    // write logs in parallel to the designated path
+                    List<Observable<Boolean>> allLogs = networkResources.values().stream().flatMap(Collection::stream)
+                            .map(id -> infraService.resourceName(id)
+                                    .map(n -> {
+                                        String rawFileName = String.format("acctests-hook_%s_%s_%s.log", executionContext.getCurrentScenario().getName(), n, StringUtils.substring(id, 0, 12));
+                                        File f = new File(dir, sanitizeName(rawFileName));
+                                        logger.debug("Writing logs to {}", f);
+                                        return f;
+                                    })
+                                    .flatMap(f -> infraService.writeLogs(id, new FileOutputStream(f))))
+                            .collect(Collectors.toList());
+                    Observable.zip(allLogs, objects -> true).blockingSubscribe();
+                }
                 infraService.deleteNetwork(networkResources).blockingSubscribe();
             } finally {
                 DataStoreFactory.getScenarioDataStore().remove("networkResources");
             }
         }
+    }
+
+    static String sanitizeName(String name) {
+        if( null == name ) {
+            return "";
+        }
+
+        if( SystemUtils.IS_OS_LINUX ) {
+            return name.replaceAll( "[\u0000/]+", "" ).trim();
+        }
+
+        return name.replaceAll( "[\u0000-\u001f<>:\"/\\\\|?*\u007f]+", "" ).trim();
     }
 
     /**

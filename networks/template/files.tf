@@ -3,6 +3,7 @@ resource "local_file" "docker" {
   content  = <<YML
 quorum:
   consensus: ${var.consensus}
+  infrastructure-logging-path: ${var.output_dir}/logs
   docker-infrastructure:
     enabled: true
 %{if var.remote_docker_config != null~}
