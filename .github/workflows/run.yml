@@ -140,6 +140,8 @@ jobs:
           # we don't remove the container after run as we need to clean up the infra if used
           docker run \
               --name acctests-run ${{ steps.setup.outputs.dockerEnv }} \
+              -e "TF_VAR_quorum_docker_image={ name = \"docker.pkg.github.com/trung/quorum/quorum:pm-client-refactoring\", local = false }" \
+              -e "TF_VAR_docker_registry=[ { name = \"docker.pkg.github.com\", username = \"trung\", password = \"${{ github.token }}\" }]" \
               -v ${{ steps.setup.outputs.outputDir }}:${{ steps.setup.outputs.outputDir }} \
               ${{ needs.docker-build.outputs.image_name }} test \
                 -PgaugeFailSafe \
